@@ -40,7 +40,7 @@ namespace MyApartments
 			// emulate HoloLens:
 			camera.Fov = 30;
 			camera.NearClip = 0.1f;
-			camera.FarClip = 20f;
+			camera.FarClip = 50f; //20
 
 			// directional light
 			Node lightNode = scene.CreateChild();
@@ -56,21 +56,25 @@ namespace MyApartments
 
 			// load spatial data
 			var files = Directory.GetFiles(@"Data/Surfaces");
-			foreach (var file in files)
+			foreach (var file in files.Where(n => Path.GetFileNameWithoutExtension(n) == "6202c"))
 			{
 				var surface = JsonConvert.DeserializeObject<SurfaceDto>(File.ReadAllText(file));
-
-				if (surface.BoundsCenter.Y > 1) continue;//ugly way to filter ceilings
 
 				var child = scene.CreateChild();
 				child.Position = new Vector3(surface.BoundsCenter.X, surface.BoundsCenter.Y, surface.BoundsCenter.Z);
 				child.Rotation = new Quaternion(surface.BoundsOrientation.X, surface.BoundsOrientation.Y, surface.BoundsOrientation.Z, surface.BoundsOrientation.W);
+				var angles = child.Rotation.ToEulerAngles();
+
+				child.Name = Path.GetFileNameWithoutExtension(file);
 
 				var staticModel = child.CreateComponent<StaticModel>();
 				staticModel.Model = CreateModelFromVertexData(surface.VertexData, surface.IndexData);
-				var randomMaterial = Material.FromColor(new Color(Randoms.Next(0.3f, 0.6f), Randoms.Next(0.3f, 0.6f), Randoms.Next(0.3f, 0.6f)));
-				randomMaterial.FillMode = FillMode.Solid; // change to Wireframe
-				staticModel.SetMaterial(randomMaterial);
+
+				Material mat = new Material();
+				mat.FillMode = FillMode.Wireframe;
+				mat.SetTechnique(0, CoreAssets.Techniques.NoTextureUnlitVCol, 1, 1);
+
+				staticModel.SetMaterial(mat);
 			}
 
 			cameraNode.Position = new Vector3(2, 0, 0);
@@ -83,23 +87,54 @@ namespace MyApartments
 		{
 			// this code is based on
 			// https://github.com/xamarin/urho-samples/blob/master/FeatureSamples/Core/34_DynamicGeometry/DynamicGeometry.cs#L188-L189
+			
+			var upVector = new Vector3(0, 1, 0);
+			var newVertices = new List<SpatialVertex>();
 
-			// vertexData - is an array of:
-			// { PositionX, PositionY, PositionZ, NormalX, NormalY, NormalZ } * VerticesCount
-			// according to a mask: "ElementMask.Position | ElementMask.Normal".
+			for (int i = 0; i < vertexData.Length; i+=6)
+			{
+				var posX = vertexData[i + 0];
+				var posY = vertexData[i + 1];
+				var posZ = vertexData[i + 2];
+				//position is not 'World' it should be transformed by BoundsCenter & BoundsOrientation, see line 64
 
+				var norX = vertexData[i + 3];
+				var norY = vertexData[i + 4];
+				var norZ = vertexData[i + 5];
+
+				var normal = new Vector3(norX, norY, norZ);
+				var angle = Vector3.CalculateAngle(upVector, normal);
+
+				Color color = Color.Red;
+				if (angle > 0.3f)
+				{
+					//Yellow color for vertices with Normal == Vector3D::UP
+					color = Color.Yellow;
+				}
+
+				newVertices.Add(new SpatialVertex
+					{
+						NormalX = norX,
+						NormalY = norY,
+						NormalZ = norZ,
+						PositionX = posX,
+						PositionY = posY,
+						PositionZ = posZ,
+						Color = ToUInt(color),
+					});
+			}
+			
 			var model = new Model();
 			var vertexBuffer = new VertexBuffer(Context, false);
 			var indexBuffer = new IndexBuffer(Context, false);
 			var geometry = new Geometry();
 
 			vertexBuffer.Shadowed = true;
-			vertexBuffer.SetSize((uint)vertexData.Length / 6 /*6 components for a single vertex, see the comment above*/, ElementMask.Position | ElementMask.Normal, false);
+			vertexBuffer.SetSize((uint)newVertices.Count, ElementMask.Position | ElementMask.Normal | ElementMask.Color, false);
 
-			fixed (float* p = &vertexData[0])
-			{
-				vertexBuffer.SetData((void*)p);
-			}
+			var newVerticesArray = newVertices.ToArray();
+			fixed (SpatialVertex* p = &newVerticesArray[0])
+				vertexBuffer.SetData(p);
 
 			indexBuffer.Shadowed = true;
 			indexBuffer.SetSize((uint)indexData.Length, false, true);
@@ -135,5 +170,26 @@ namespace MyApartments
 			if (Input.GetKeyDown(Key.A)) cameraNode.Translate(-Vector3.UnitX * moveSpeed * timeStep);
 			if (Input.GetKeyDown(Key.D)) cameraNode.Translate(Vector3.UnitX * moveSpeed * timeStep);
 		}
+
+		//note: this method will be added to Color with the next nuget update
+		static uint ToUInt(Color c)
+		{
+			uint r = (uint)MathHelper.Clamp(((int)(c.R * 255.0f)), 0, 255);
+			uint g = (uint)MathHelper.Clamp(((int)(c.G * 255.0f)), 0, 255);
+			uint b = (uint)MathHelper.Clamp(((int)(c.B * 255.0f)), 0, 255);
+			uint a = (uint)MathHelper.Clamp(((int)(c.A * 255.0f)), 0, 255);
+			return (a << 24) | (b << 16) | (g << 8) | r;
+		}
+	}
+
+	public struct SpatialVertex
+	{
+		public float PositionX;
+		public float PositionY;
+		public float PositionZ;
+		public float NormalX;
+		public float NormalY;
+		public float NormalZ;
+		public uint Color;
 	}
 }

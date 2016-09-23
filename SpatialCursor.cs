@@ -48,7 +48,9 @@ namespace MyApartments.Desktop
 			//camera = Scene.GetComponent<Camera>(true); -- doesn't work! :(( ugly workaround:
 			camera = Scene.GetChildrenWithComponent<Camera>(true)[0].GetComponent<Camera>();
 		}
-		
+
+		private string lastSurfName = "";
+
 		protected override void OnUpdate(float timeStep)
 		{
 			base.OnUpdate(timeStep);
@@ -63,6 +65,10 @@ namespace MyApartments.Desktop
 
 			if (raycastSingle != null)
 			{
+				if (lastSurfName != raycastSingle.Value.Node.Name)
+				{
+					lastSurfName = raycastSingle.Value.Node.Name;
+				}
 				CursorNode.Position = raycastSingle.Value.Position;
 				CursorNode.Rotation = FromLookRotation(new Vector3(0, 1, 0), raycastSingle.Value.Normal);
 			}
