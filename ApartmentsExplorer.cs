@@ -60,6 +60,8 @@ namespace MyApartments
 			{
 				var surface = JsonConvert.DeserializeObject<SurfaceDto>(File.ReadAllText(file));
 
+				if (surface.BoundsCenter.Y > 1) continue;//ugly way to filter ceilings
+
 				var child = scene.CreateChild();
 				child.Position = new Vector3(surface.BoundsCenter.X, surface.BoundsCenter.Y, surface.BoundsCenter.Z);
 				child.Rotation = new Quaternion(surface.BoundsOrientation.X, surface.BoundsOrientation.Y, surface.BoundsOrientation.Z, surface.BoundsOrientation.W);
@@ -100,7 +102,7 @@ namespace MyApartments
 			}
 
 			indexBuffer.Shadowed = true;
-			indexBuffer.SetSize((uint)indexData.Length, false, false);
+			indexBuffer.SetSize((uint)indexData.Length, false, true);
 			indexBuffer.SetData(indexData);
 
 			geometry.SetVertexBuffer(0, vertexBuffer);
