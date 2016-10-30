@@ -1,127 +1,122 @@
-﻿using System;
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using System.IO;
-using System.Linq;
-using System.Threading.Tasks;
-using MyApartments.Desktop;
 using Newtonsoft.Json;
 using Urho;
-using Urho.Gui;
-using Urho.Actions;
-using Urho.Navigation;
-using Urho.Shapes;
 
 namespace MyApartments
 {
-	public class ApartmentsExplorer : Application
+	class Program
 	{
-		float yaw;
-		float pitch;
-		Node cameraNode;
-		Scene scene;
+		static void Main(string[] args)
+		{
+			new MeshViewerApp("Data") { }.Run();
+		}
+	}
 
-		public ApartmentsExplorer() : base(new ApplicationOptions("Data") { Width = 1286, Height = 720 })
+	public class MeshViewerApp : Application
+	{
+		Node environmentNode;
+		Node lightNode;
+
+		public MeshViewerApp(string o) : base(new ApplicationOptions(o))
 		{
 		}
 
-		protected override void Start()
+		protected override unsafe void Start()
 		{
-			scene = new Scene();
+			var scene = new Scene();
 			scene.CreateComponent<Octree>();
 			var zone = scene.CreateComponent<Zone>();
-			zone.AmbientColor = new Color(0.8f, 0.8f, 0.8f);
+			zone.AmbientColor = new Color(0.6f, 0.6f, 0.6f);
 
-			// Camera and Viewport
 			cameraNode = scene.CreateChild();
 			var camera = cameraNode.CreateComponent<Camera>();
-			var leftViewport = new Viewport(scene, camera, null);
-			Renderer.SetViewport(0, leftViewport);
 
-			// emulate HoloLens:
-			camera.Fov = 30;
-			camera.NearClip = 0.1f;
-			camera.FarClip = 20f;
+			var viewport = new Viewport(scene, camera, null);
+			Renderer.SetViewport(0, viewport);
 
-			// directional light
-			Node lightNode = scene.CreateChild();
-			lightNode.SetDirection(new Vector3(0, -1, 0));
-			Light light = lightNode.CreateComponent<Light>();
+			lightNode = scene.CreateChild();
+			lightNode.Position = new Vector3(0, 3, 0);
+			var light = lightNode.CreateComponent<Light>();
 			light.LightType = LightType.Directional;
+			light.Brightness = 2f;
+			light.Range = 200;
 
-			// just a box in the 0,0,0 position (origin).
-			var originPointNode = scene.CreateChild();
-			originPointNode.SetScale(0.2f);
-			var box = originPointNode.CreateComponent<Box>();
-			box.SetMaterial(ResourceCache.GetMaterial("Materials/BoxMaterial.xml"));
+			environmentNode = scene.CreateChild();
+			environmentNode.SetScale(0.2f);
 
-			// load spatial data
-			var files = Directory.GetFiles(@"Data/Surfaces");
-			foreach (var file in files)
+			var surfs = JsonConvert.DeserializeObject<Dictionary<string, SurfaceDto>>(File.ReadAllText(@"Data\UrhoSpatialMappingData.txt"));
+			new MonoDebugHud(this).Show();
+
+			var material = ResourceCache.GetMaterial("Material.xml");
+			material.CullMode = CullMode.Ccw;
+			material.FillMode = FillMode.Solid;
+
+			foreach (var item in surfs)
 			{
-				var surface = JsonConvert.DeserializeObject<SurfaceDto>(File.ReadAllText(file));
+				var surface = item.Value;
+				var orient = surface.BoundsOrientation;
+				var bounds = surface.BoundsCenter;
 
-				if (surface.BoundsCenter.Y > 1) continue;//ugly way to filter ceilings
-
-				var child = scene.CreateChild();
-				child.Position = new Vector3(surface.BoundsCenter.X, surface.BoundsCenter.Y, surface.BoundsCenter.Z);
-				child.Rotation = new Quaternion(surface.BoundsOrientation.X, surface.BoundsOrientation.Y, surface.BoundsOrientation.Z, surface.BoundsOrientation.W);
+				var child = environmentNode.CreateChild(item.Key);
 
 				var staticModel = child.CreateComponent<StaticModel>();
-				staticModel.Model = CreateModelFromVertexData(surface.VertexData, surface.IndexData);
-				var randomMaterial = Material.FromColor(new Color(Randoms.Next(0.3f, 0.6f), Randoms.Next(0.3f, 0.6f), Randoms.Next(0.3f, 0.6f)));
-				randomMaterial.FillMode = FillMode.Solid; // change to Wireframe
-				staticModel.SetMaterial(randomMaterial);
+				staticModel.Model = CreateModelFromVertexData(surface);
+				child.Position = *(Vector3*)(void*)&bounds;
+				child.Rotation = *(Quaternion*)(void*)&orient;
+				staticModel.SetMaterial(material);
+				//staticModel.SetMaterial(Material.FromColor(new Color(Randoms.Next(0.3f, 0.7f), Randoms.Next(0.3f, 0.7f), Randoms.Next(0.3f, 0.7f))));
 			}
-
-			cameraNode.Position = new Vector3(2, 0, 0);
-
-			// spatial cursor
-			scene.CreateComponent<SpatialCursor>();
 		}
 
-		unsafe Model CreateModelFromVertexData(float[] vertexData, short[] indexData)
+		unsafe Model CreateModelFromVertexData(SurfaceDto surface)
 		{
-			// this code is based on
-			// https://github.com/xamarin/urho-samples/blob/master/FeatureSamples/Core/34_DynamicGeometry/DynamicGeometry.cs#L188-L189
-
-			// vertexData - is an array of:
-			// { PositionX, PositionY, PositionZ, NormalX, NormalY, NormalZ } * VerticesCount
-			// according to a mask: "ElementMask.Position | ElementMask.Normal".
-
 			var model = new Model();
 			var vertexBuffer = new VertexBuffer(Context, false);
 			var indexBuffer = new IndexBuffer(Context, false);
 			var geometry = new Geometry();
 
 			vertexBuffer.Shadowed = true;
-			vertexBuffer.SetSize((uint)vertexData.Length / 6 /*6 components for a single vertex, see the comment above*/, ElementMask.Position | ElementMask.Normal, false);
+			vertexBuffer.SetSize((uint)surface.VertexData.Length, ElementMask.Position | ElementMask.Normal | ElementMask.Color, false);
 
-			fixed (float* p = &vertexData[0])
+			fixed (SpatialVertexDto* p = &surface.VertexData[0])
 			{
 				vertexBuffer.SetData((void*)p);
 			}
 
+			var indexData = surface.IndexData;
 			indexBuffer.Shadowed = true;
-			indexBuffer.SetSize((uint)indexData.Length, false, true);
+			indexBuffer.SetSize((uint)indexData.Length, false, false);
 			indexBuffer.SetData(indexData);
 
 			geometry.SetVertexBuffer(0, vertexBuffer);
 			geometry.IndexBuffer = indexBuffer;
-			geometry.SetDrawRange(PrimitiveType.TriangleList, 0, (uint)indexData.Length, true);
+			geometry.SetDrawRange(PrimitiveType.TriangleList, 0, (uint)indexData.Length, 0, (uint)surface.VertexData.Length, true);
 
 			model.NumGeometries = 1;
 			model.SetGeometry(0, 0, geometry);
-			model.BoundingBox = new BoundingBox(new Vector3(-1.0f, -1.0f, -1.0f), new Vector3(1.0f, 1.0f, 1.0f));
+			model.BoundingBox = new BoundingBox(new Vector3(-1.26f, -1.26f, -1.26f), new Vector3(1.26f, 1.26f, 1.26f));
 
 			return model;
 		}
 
 		protected override void OnUpdate(float timeStep)
 		{
-			// rotate & move camera by mouse and WASD:
+			lightNode.SetDirection(cameraNode.Direction);
+			EmulateCamera(timeStep);
+			base.OnUpdate(timeStep);
+		}
 
+		float yaw;
+		float pitch;
+		Node cameraNode;
+
+		void EmulateCamera(float timeStep, float moveSpeed = 2.0f)
+		{
 			const float mouseSensitivity = .1f;
-			const float moveSpeed = 5;
+
+			if (UI.FocusElement != null)
+				return;
 
 			var mouseMove = Input.MouseMove;
 			yaw += mouseSensitivity * mouseMove.X;
